@@ -1,5 +1,5 @@
 -- Rules shared by the server and the clients: OSRS-style melee (game ticks of 0.6 s, accuracy and max hit
--- rolls), the skills' xp curve, the longsword and the rat.
+-- rolls), the skills' xp curve, the longsword, the rat, trees and loot.
 local Config = {}
 
 Config.TICK = 0.6
@@ -45,10 +45,27 @@ Config.ENEMIES = {
 		respawn = 15, -- seconds
 		count = 7,
 		walk = 7,
+		-- what it leaves behind: always its bones, sometimes a few coins
+		drops = { { id = "bones", n = 1, chance = 1 }, { id = "coins", min = 1, max = 8, chance = 0.4 } },
 	},
 }
 
-Config.SKILLS = { "Attack", "Strength", "Defence", "Hitpoints" }
+-- Woodcutting: a roll every 4 ticks while chopping; the chance climbs from low (level 1) to high (level 99)
+-- out of 256, as in OSRS for a bronze axe. A normal tree falls after one log, an oak has a 1 in 8 chance a log.
+Config.CHOP_TICKS = 4
+Config.TREES = {
+	Tree = { name = "Tree", level = 1, xp = 25, log = "logs", low = 64, high = 200, deplete = 1, respawn = { 8, 14 } },
+	Oak = { name = "Oak", level = 15, xp = 37.5, log = "oak_logs", low = 32, high = 100, deplete = 1 / 8, respawn = { 14, 22 } },
+}
+Config.AXE = "bronze_axe"
+Config.START_ITEMS = { { id = "bronze_axe", n = 1 } }
+
+-- ground items: only whoever dropped or earned them can take them at first, then anyone, then they are gone
+Config.LOOT_PRIVATE = 60
+Config.LOOT_LIFETIME = 180
+Config.PICKUP_REACH = 3
+
+Config.SKILLS = { "Attack", "Strength", "Defence", "Hitpoints", "Prayer", "Woodcutting" }
 Config.START_XP = { Hitpoints = 1154 } -- level 10 Hitpoints, as every new adventurer has
 
 -- total xp needed for each level (the standard RuneScape curve)
@@ -79,6 +96,19 @@ function Config.hitChance(attackRoll: number, defenceRoll: number): number
 		return 1 - (defenceRoll + 2) / (2 * (attackRoll + 1))
 	end
 	return attackRoll / (2 * (defenceRoll + 1))
+end
+
+-- the combat level from the five combat skills (OSRS: melee only so far)
+function Config.combatLevel(levels: { [string]: number }): number
+	local base = 0.25 * ((levels.Defence or 1) + (levels.Hitpoints or 10) + math.floor((levels.Prayer or 1) / 2))
+	local melee = 0.325 * ((levels.Attack or 1) + (levels.Strength or 1))
+	return math.floor(base + melee)
+end
+
+-- the chance out of 1 that one woodcutting roll gets a log
+function Config.chopChance(tree, level: number): number
+	local l = math.clamp(level, 1, 99)
+	return (1 + math.floor(tree.low * (99 - l) / 98 + tree.high * (l - 1) / 98 + 0.5)) / 256
 end
 
 function Config.styleById(id: string?)

@@ -45,12 +45,65 @@ local function piece(tool: Tool, handle: BasePart, name: string, props: { [strin
 end
 
 -- sets Tool.Grip from the model's GripPoint (see the top of this file)
-function Sword.fit(tool: Tool)
+function Sword.fit(tool: Tool, tilt: number?, roll: number?)
 	local handle = tool:FindFirstChild("Handle")
 	local point = handle and handle:FindFirstChild("GripPoint")
 	if point and point:IsA("Attachment") then
-		tool.Grip = point.CFrame * CFrame.Angles(HOLD_TILT, 0, 0) * CFrame.Angles(0, HOLD_ROLL, 0)
+		tool.Grip = point.CFrame * CFrame.Angles(tilt or HOLD_TILT, 0, 0) * CFrame.Angles(0, roll or HOLD_ROLL, 0)
 	end
+end
+
+-- the bronze axe a hero takes out of the bag to chop a tree: a wooden haft with the head at the top, its edge
+-- toward +Z (the GripPoint rule: +Y up the haft, +Z out of the cutting edge)
+local AXE_NAME = "Bronze axe"
+function Sword.makeAxe(): Tool
+	local tool = Instance.new("Tool")
+	tool.Name = AXE_NAME
+	tool.CanBeDropped = false
+	local haft = 2.1
+	local handle = Instance.new("Part")
+	handle.Name = "Handle"
+	handle.Size = Vector3.new(0.2, haft, 0.2)
+	handle.Color = Color3.fromRGB(112, 78, 48)
+	handle.Material = Enum.Material.Wood
+	handle.CanCollide = false
+	handle.CanQuery = false
+	handle.Massless = true
+	handle.CFrame = CFrame.new()
+	handle.Parent = tool
+	local bronze = Config.SWORD.color
+	local top = haft / 2
+	piece(tool, handle, "Head", { Size = Vector3.new(0.16, 0.46, 0.5), Color = bronze, Material = Enum.Material.Metal }, CFrame.new(0, top - 0.3, 0.25))
+	piece(tool, handle, "Edge", { Class = "WedgePart", Size = Vector3.new(0.14, 0.7, 0.36), Color = bronze:Lerp(Color3.new(1, 1, 1), 0.15),
+		Material = Enum.Material.Metal, Reflectance = 0.15 }, CFrame.new(0, top - 0.3, 0.68))
+	piece(tool, handle, "Cap", { Size = Vector3.new(0.24, 0.14, 0.24), Color = bronze, Material = Enum.Material.Metal }, CFrame.new(0, top + 0.05, 0))
+	local point = Instance.new("Attachment")
+	point.Name = "GripPoint"
+	point.Position = Vector3.new(0, -top + 0.35, 0)
+	point.Parent = handle
+	Sword.fit(tool, math.rad(10), 0)
+	return tool
+end
+
+-- takes the sword or the axe in hand; the other one goes back in the backpack
+function Sword.hold(player: Player, which: "sword" | "axe")
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	if not hum or hum.Health <= 0 or not backpack then
+		return
+	end
+	local name = which == "axe" and AXE_NAME or Config.SWORD.name
+	local held = char:FindFirstChildOfClass("Tool")
+	if held and held.Name == name then
+		return
+	end
+	local tool = backpack:FindFirstChild(name) :: Tool?
+	if not tool then
+		tool = which == "axe" and Sword.makeAxe() or Sword.make()
+		tool.Parent = backpack
+	end
+	hum:EquipTool(tool)
 end
 
 function Sword.make(): Tool

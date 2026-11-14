@@ -1,5 +1,7 @@
--- The player's side: walking up to whatever you tapped and facing it while you fight, hit splats, the rats'
--- names, health bars and moves, the swing's swish and trail, xp drops, the skills panel and the combat style.
+-- The player's side: walking up to whatever you tapped and facing it while you fight or chop, hit splats, the
+-- rats' names, health bars and moves, the swing's swish and trail, xp drops, the skills panel, the combat style,
+-- the bag (Bag module) and the hover text over what can be tapped.
+-- BUILD er-2
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -8,9 +10,24 @@ local CollectionService = game:GetService("CollectionService")
 local ContentProvider = game:GetService("ContentProvider")
 local PathfindingService = game:GetService("PathfindingService")
 local StarterPlayer = game:GetService("StarterPlayer")
+local StarterGui = game:GetService("StarterGui")
+local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
 
 local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
+local Items = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Items"))
+local Bag = require(script.Parent:WaitForChild("Bag"))
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
+
+-- the sword and the axe are swapped by the game itself, so Roblox's own tool bar stays hidden
+task.spawn(function()
+	for _ = 1, 20 do
+		if pcall(StarterGui.SetCoreGuiEnabled, StarterGui, Enum.CoreGuiType.Backpack, false) then
+			return
+		end
+		task.wait(0.5)
+	end
+end)
 
 local player = Players.LocalPlayer
 local gui = Instance.new("ScreenGui")
@@ -100,7 +117,12 @@ local hpText = label(hpBack, "10 / 10", 18)
 hpText.Size = UDim2.fromScale(1, 1)
 hpText.ZIndex = 2
 
-local ICONS = { Attack = "⚔️", Strength = "💪", Defence = "🛡️", Hitpoints = "❤️" }
+local ICONS = { Attack = "⚔️", Strength = "💪", Defence = "🛡️", Hitpoints = "❤️", Prayer = "✨", Woodcutting = "🪓" }
+local combatRow = label(panel, "", 18, GOLD)
+combatRow.LayoutOrder = 0
+combatRow.Size = UDim2.new(1, 0, 0, 22)
+combatRow.TextXAlignment = Enum.TextXAlignment.Left
+hpBack.LayoutOrder = -1
 local rows = {}
 for i, skill in Config.SKILLS do
 	local l = label(panel, "", 18)
@@ -110,11 +132,15 @@ for i, skill in Config.SKILLS do
 	rows[skill] = l
 end
 local function refreshSkills()
+	local levels = {}
 	for skill, l in rows do
 		local xp = player:GetAttribute("XP_" .. skill) or 0
-		l.Text = string.format("%s %s  <font color=\"#ffdc5a\">%d</font>", ICONS[skill], skill, Config.levelFor(xp))
+		levels[skill] = Config.levelFor(xp)
+		l.Text = string.format("%s %s  <font color=\"#ffdc5a\">%d</font>", ICONS[skill], skill, levels[skill])
 		l.RichText = true
 	end
+	combatRow:SetAttribute("Base", string.format("Combat level %d", Config.combatLevel(levels)))
+	combatRow.Text = combatRow:GetAttribute("Base") .. (combatRow:GetAttribute("Suffix") or "")
 end
 for _, skill in Config.SKILLS do
 	player:GetAttributeChangedSignal("XP_" .. skill):Connect(refreshSkills)
@@ -149,9 +175,14 @@ stroke(styleButton, 2, Color3.fromRGB(70, 20, 15)).ApplyStrokeMode = Enum.ApplyS
 styleButton.Parent = gui
 local function refreshStyle()
 	local s = Config.styleById(player:GetAttribute("Style"))
-	styleButton.Text = string.format("⚔️ %s\n<font size=\"14\">trains %s</font>", s.name, s.skill)
 	styleButton.RichText = true
+	if styleButton:GetAttribute("Compact") then
+		styleButton.Text = string.format("⚔️<br/><font size=\"11\">%s</font>", s.name)
+	else
+		styleButton.Text = string.format("⚔️ %s<br/><font size=\"14\">trains %s</font>", s.name, s.skill)
+	end
 end
+styleButton:GetAttributeChangedSignal("Compact"):Connect(refreshStyle)
 player:GetAttributeChangedSignal("Style"):Connect(refreshStyle)
 refreshStyle()
 styleButton.Activated:Connect(function()
@@ -171,8 +202,9 @@ messageLabel.Position = UDim2.new(0.5, 0, 1, -80)
 messageLabel.Size = UDim2.new(0.8, 0, 0, 30)
 messageLabel.TextTransparency = 1
 messageLabel.TextStrokeTransparency = 1
+messageLabel.ZIndex = 15
 local messageSeq = 0
-remotes.Message.OnClientEvent:Connect(function(text: string, kind: string?)
+local function say(text: string, kind: string?)
 	messageSeq += 1
 	local seq = messageSeq
 	messageLabel.Text = text
@@ -183,14 +215,103 @@ remotes.Message.OnClientEvent:Connect(function(text: string, kind: string?)
 			TweenService:Create(messageLabel, TweenInfo.new(0.6), { TextTransparency = 1 }):Play()
 		end
 	end)
+end
+remotes.Message.OnClientEvent:Connect(say)
+local bag = Bag.init(gui, FONT, say)
+
+-- ===== layout: a computer keeps the wide buttons bottom right; a phone on its side moves them up the right
+-- edge as squares (clear of the jump button), opens the bag beside them and folds the skills list away =====
+
+local panelScale = Instance.new("UIScale")
+panelScale.Parent = panel
+local function layoutHud()
+	local cam = workspace.CurrentCamera
+	local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+	local h = vp.Y - GuiService.TopbarInset.Height
+	local compact = UserInputService.TouchEnabled and (h < 560 or vp.X < 900)
+	styleButton:SetAttribute("Compact", compact)
+	bag.button:SetAttribute("Compact", compact)
+	local panelH = bag.panel.Size.Y.Offset
+	if compact then
+		local sq = 58
+		bag.button.AnchorPoint = Vector2.new(1, 0)
+		bag.button.Position = UDim2.new(1, -12, 0, 8)
+		bag.button.Size = UDim2.fromOffset(sq, sq)
+		bag.button.TextSize = 24
+		styleButton.AnchorPoint = Vector2.new(1, 0)
+		styleButton.Position = UDim2.new(1, -12, 0, 8 + sq + 8)
+		styleButton.Size = UDim2.fromOffset(sq, sq)
+		styleButton.TextSize = 22
+		-- keep the bag clear of Roblox's jump button as well as our squares
+		local right = 12 + sq + 8
+		local touch = player.PlayerGui:FindFirstChild("TouchGui")
+		local jump = touch and touch:FindFirstChild("JumpButton", true) :: GuiObject?
+		if jump and jump.Visible and jump.AbsoluteSize.X > 0 then
+			right = math.max(right, vp.X - jump.AbsolutePosition.X + 8)
+		end
+		bag.panel.AnchorPoint = Vector2.new(1, 0)
+		bag.panel.Position = UDim2.new(1, -right, 0, 8)
+		bag.scale.Scale = math.clamp((h - 16) / panelH, 0.4, 1)
+		panelScale.Scale = 0.8
+	else
+		bag.button.AnchorPoint = Vector2.new(1, 1)
+		bag.button.Position = UDim2.new(1, -12, 1, -76)
+		bag.button.Size = UDim2.fromOffset(190, 48)
+		bag.button.TextSize = 20
+		styleButton.AnchorPoint = Vector2.new(1, 1)
+		styleButton.Position = UDim2.new(1, -12, 1, -12)
+		styleButton.Size = UDim2.fromOffset(190, 56)
+		styleButton.TextSize = 18
+		bag.panel.AnchorPoint = Vector2.new(1, 1)
+		bag.panel.Position = UDim2.new(1, -12, 1, -132)
+		bag.scale.Scale = math.clamp((h - 150) / panelH, 0.5, 1)
+		panelScale.Scale = 1
+	end
+end
+layoutHud()
+bag.button.Activated:Connect(layoutHud)
+workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(layoutHud)
+GuiService:GetPropertyChangedSignal("TopbarInset"):Connect(layoutHud)
+
+-- the skills list folds away on a phone; tapping the combat level opens and closes it
+local skillsOpen = not (UserInputService.TouchEnabled and workspace.CurrentCamera.ViewportSize.Y < 600)
+local function showSkills()
+	for _, l in rows do
+		l.Visible = skillsOpen
+	end
+	combatRow:SetAttribute("Suffix", skillsOpen and "  [-]" or "  [+]")
+	combatRow.Text = (combatRow:GetAttribute("Base") or "") .. combatRow:GetAttribute("Suffix")
+end
+local fold = Instance.new("TextButton")
+fold.Name = "Fold"
+fold.BackgroundTransparency = 1
+fold.Text = ""
+fold.Size = UDim2.fromScale(1, 1)
+fold.ZIndex = 5
+fold.Parent = combatRow
+fold.Activated:Connect(function()
+	skillsOpen = not skillsOpen
+	showSkills()
 end)
+showSkills()
+
+if workspace:GetAttribute("SavesOff") then
+	task.delay(2, say, "Saving is off on this server (Studio test).")
+end
 
 remotes.Xp.OnClientEvent:Connect(function(skill: string, amount: number)
 	local l = label(gui, string.format("%s +%s xp", ICONS[skill] or "", (amount % 1 == 0) and tostring(amount) or string.format("%.1f", amount)), 20, GOLD)
 	l.AnchorPoint = Vector2.new(1, 0.5)
-	l.Position = UDim2.new(1, -20, 0.45, skill == "Hitpoints" and 26 or 0)
-	l.Size = UDim2.fromOffset(160, 26)
 	l.TextXAlignment = Enum.TextXAlignment.Right
+	-- on a phone the right edge holds the buttons, so the drops rise over the hero instead
+	if styleButton:GetAttribute("Compact") then
+		l.AnchorPoint = Vector2.new(0.5, 0.5)
+		l.TextXAlignment = Enum.TextXAlignment.Center
+		l.Position = UDim2.new(0.5, 0, 0.32, skill == "Hitpoints" and 26 or 0)
+	else
+		l.Position = UDim2.new(1, -20, 0.45, skill == "Hitpoints" and 26 or 0)
+	end
+	l.Size = UDim2.fromOffset(160, 26)
 	TweenService:Create(l, TweenInfo.new(1.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 		{ Position = l.Position - UDim2.fromOffset(0, 70), TextTransparency = 1 }):Play()
 	task.delay(1.5, l.Destroy, l)
@@ -390,11 +511,13 @@ task.spawn(function()
 	end
 end)
 local target: Model? = nil
+local targetReach = Config.REACH - 1
 local lastMove = 0
 local path = PathfindingService:CreatePath({ AgentRadius = 2, AgentHeight = 5, AgentCanJump = false, WaypointSpacing = 4 })
 local route = { busy = false, at = 0, goal = Vector3.zero, points = nil :: { any }?, i = 1 }
-remotes.Fight.OnClientEvent:Connect(function(m: Model?)
+remotes.Fight.OnClientEvent:Connect(function(m: Model?, reach: number?)
 	target = m
+	targetReach = reach or Config.REACH - 1
 	lastMove = 0
 	route.points = nil
 	local char = player.Character
@@ -411,7 +534,8 @@ RunService.Heartbeat:Connect(function()
 	if not target or not hum or not hrp then
 		return
 	end
-	local troot = target:FindFirstChild("HumanoidRootPart") :: BasePart?
+	-- monsters walk on their root part, trees and ground items are found by their primary part
+	local troot = (target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart) :: BasePart?
 	if not troot or not target.Parent then
 		target = nil
 		hum.AutoRotate = true
@@ -424,11 +548,13 @@ RunService.Heartbeat:Connect(function()
 		remotes.StopFight:FireServer()
 		return
 	end
+	local radius = target:GetAttribute("Radius") or 1.6
 	local offset = (hrp.Position - troot.Position) * Vector3.new(1, 0, 1)
-	local dist = offset.Magnitude - 1.6
-	if dist > Config.REACH - 1 then
+	local dist = offset.Magnitude - radius
+	if dist > targetReach then
 		hum.AutoRotate = true
-		local goal = troot.Position + offset.Unit * (1.6 + Config.REACH - 2)
+		local away = offset.Magnitude > 0.05 and offset.Unit or Vector3.new(0, 0, 1)
+		local goal = troot.Position * Vector3.new(1, 0, 1) + Vector3.new(0, hrp.Position.Y, 0) + away * (radius + math.max(0, targetReach - 1))
 		-- a path around fences and walls, worked out again when the target has moved off it
 		if not route.busy and (not route.points or (route.goal - goal).Magnitude > 3 and os.clock() - route.at > 0.8) then
 			route.busy = true
@@ -457,6 +583,64 @@ RunService.Heartbeat:Connect(function()
 		hum.AutoRotate = false
 		local look = Vector3.new(troot.Position.X, hrp.Position.Y, troot.Position.Z)
 		hrp.CFrame = hrp.CFrame:Lerp(CFrame.lookAt(hrp.Position, look), 0.25)
+	end
+end)
+
+-- ===== hover text: what tapping the thing under the mouse will do =====
+
+local hover = label(gui, "", 18)
+hover.Name = "Hover"
+hover.AnchorPoint = Vector2.new(0, 1)
+hover.Size = UDim2.fromOffset(260, 24)
+hover.TextXAlignment = Enum.TextXAlignment.Left
+hover.Visible = false
+hover.RichText = true
+hover.ZIndex = 20
+local hovered: Model? = nil
+local function hoverText(m: Model): string?
+	if CollectionService:HasTag(m, "Enemy") then
+		if m:GetAttribute("Dead") then
+			return nil
+		end
+		return string.format("Attack <font color=\"#ffff00\">%s</font> <font color=\"#9cff9c\">(level-%d)</font>", m.Name, m:GetAttribute("Level") or 1)
+	elseif CollectionService:HasTag(m, "Tree") then
+		if m:GetAttribute("Stump") then
+			return nil
+		end
+		return string.format("Chop down <font color=\"#00ffff\">%s</font>", m.Name)
+	elseif m:GetAttribute("Item") then
+		local def = Items.def(m:GetAttribute("Item"))
+		local n = m:GetAttribute("N") or 1
+		return def and string.format("Take <font color=\"#ff9040\">%s%s</font>", def.name, n > 1 and (" (" .. n .. ")") or "")
+	end
+	return nil
+end
+local function watchDetector(cd: Instance)
+	if not cd:IsA("ClickDetector") then
+		return
+	end
+	cd.MouseHoverEnter:Connect(function()
+		hovered = cd.Parent :: Model
+	end)
+	cd.MouseHoverLeave:Connect(function()
+		if hovered == cd.Parent then
+			hovered = nil
+		end
+	end)
+end
+workspace.DescendantAdded:Connect(watchDetector)
+for _, d in workspace:GetDescendants() do
+	watchDetector(d)
+end
+RunService.RenderStepped:Connect(function()
+	local text = hovered and hovered.Parent and hoverText(hovered)
+	if text and UserInputService.MouseEnabled then
+		local at = UserInputService:GetMouseLocation()
+		hover.Text = text
+		hover.Position = UDim2.fromOffset(at.X + 16, at.Y - 36 + 20)
+		hover.Visible = true
+	else
+		hover.Visible = false
 	end
 end)
 

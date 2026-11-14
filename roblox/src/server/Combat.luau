@@ -11,6 +11,11 @@ local StarterPlayer = game:GetService("StarterPlayer")
 local Config = require(ReplicatedStorage:WaitForChild("Shared").Config)
 local Sword = require(script.Parent.Sword)
 local World = require(script.Parent.World)
+local Skills = require(script.Parent.Skills)
+local Actions = require(script.Parent.Actions)
+local Inventory = require(script.Parent.Inventory)
+
+local rootOf, flat, level, addXp = Skills.rootOf, Skills.flat, Skills.level, Skills.addXp
 
 local Combat = {}
 
@@ -20,55 +25,10 @@ local RAT_RADIUS = 1.6
 local remotes: Folder
 local rng = Random.new()
 local enemies = {} -- [Model] = state
-local fights = {} -- [Player] = { target = Model, nextSwing = number }
 local template: Model?
 
-local function remote(name: string): RemoteEvent
-	local r = Instance.new("RemoteEvent")
-	r.Name = name
-	r.Parent = remotes
-	return r
-end
-
-local function rootOf(player: Player): (Humanoid?, BasePart?)
-	local char = player.Character
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	local hrp = char and char:FindFirstChild("HumanoidRootPart") :: BasePart?
-	if hum and hrp and hum.Health > 0 then
-		return hum, hrp
-	end
-	return nil, nil
-end
-
-local function flat(a: Vector3, b: Vector3): number
-	return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude
-end
-
--- ===== skills =====
-
-local function xpOf(player: Player, skill: string): number
-	return player:GetAttribute("XP_" .. skill) or 0
-end
-
-local function level(player: Player, skill: string): number
-	return Config.levelFor(xpOf(player, skill))
-end
-
-local function addXp(player: Player, skill: string, amount: number)
-	local before = level(player, skill)
-	player:SetAttribute("XP_" .. skill, xpOf(player, skill) + amount)
-	remotes.Xp:FireClient(player, skill, amount)
-	local after = level(player, skill)
-	if after > before then
-		remotes.Message:FireClient(player, string.format("Congratulations, your %s level is now %d.", skill, after), "level")
-		if skill == "Hitpoints" then
-			local hum = rootOf(player)
-			if hum then
-				hum.MaxHealth = after
-				hum.Health = math.min(after, hum.Health + (after - before))
-			end
-		end
-	end
+local function fightOf(player: Player?)
+	return player and Actions.get(player, "fight")
 end
 
 local function splat(target: BasePart, dmg: number, by: Player?)
@@ -82,8 +42,6 @@ local function yardPoint(): Vector3
 	return y.center + Vector3.new(rng:NextNumber(-0.42, 0.42) * y.size.X, 0, rng:NextNumber(-0.4, 0.4) * y.size.Z)
 end
 
-local stopFight
-
 local function spawnEnemy(kind: string)
 	local def = Config.ENEMIES[kind]
 	local m = (template :: Model):Clone()
@@ -96,6 +54,7 @@ local function spawnEnemy(kind: string)
 	m:SetAttribute("Level", def.level)
 	m:SetAttribute("Hp", def.hp)
 	m:SetAttribute("MaxHp", def.hp)
+	m:SetAttribute("Radius", RAT_RADIUS)
 	local click = Instance.new("ClickDetector")
 	click.MaxActivationDistance = 120
 	click.CursorIcon = "rbxasset://textures/Cursors/KeyboardMouse/ArrowCursor.png"
@@ -131,7 +90,7 @@ local function spawnEnemy(kind: string)
 	end)
 end
 
-local function killEnemy(state)
+local function killEnemy(state, killer: Player?)
 	state.alive = false
 	state.model:SetAttribute("Dead", true)
 	state.hum:MoveTo(state.hrp.Position)
@@ -139,9 +98,18 @@ local function killEnemy(state)
 	if cd then
 		cd:Destroy()
 	end
-	for player, f in fights do
+	for player, f in Actions.all("fight") do
 		if f.target == state.model then
-			stopFight(player)
+			Actions.stop(player, f)
+		end
+	end
+	-- the loot falls where it died; the hero who killed it has it to themselves for a minute
+	local at = state.hrp.Position
+	for i, drop in state.def.drops or {} do
+		if rng:NextNumber() < drop.chance then
+			local n = drop.n or rng:NextInteger(drop.min, drop.max)
+			local spread = i == 1 and Vector3.zero or Vector3.new(rng:NextNumber(-1, 1), 0, rng:NextNumber(-1, 1))
+			Inventory.drop(drop.id, n, at + spread, killer)
 		end
 	end
 	task.delay(1.6, function()
@@ -153,13 +121,6 @@ end
 
 -- ===== fighting =====
 
-function stopFight(player: Player)
-	if fights[player] then
-		fights[player] = nil
-		remotes.Fight:FireClient(player, nil)
-	end
-end
-
 function Combat.attack(player: Player, m: Model)
 	local state = enemies[m]
 	local hum, hrp = rootOf(player)
@@ -167,19 +128,19 @@ function Combat.attack(player: Player, m: Model)
 		return
 	end
 	-- single combat, as in OSRS
-	if state.target and state.target ~= player and fights[state.target] and fights[state.target].target == m then
+	local other = fightOf(state.target)
+	if state.target and state.target ~= player and other and other.target == m then
 		remotes.Message:FireClient(player, "Someone else is fighting that.", "info")
 		return
 	end
 	if flat(hrp.Position, state.hrp.Position) > 120 then
 		return
 	end
-	local f = fights[player]
+	local f = fightOf(player)
 	if f and f.target == m then
 		return
 	end
-	fights[player] = { target = m, nextSwing = 0 }
-	remotes.Fight:FireClient(player, m)
+	Actions.start(player, { kind = "fight", target = m, reach = Config.REACH - 1, nextSwing = 0 })
 end
 
 local function swing(player: Player, f)
@@ -195,7 +156,7 @@ local function swing(player: Player, f)
 		state.nextBite = os.clock() + Config.TICK * 2
 	end
 	task.delay(contact, function()
-		if fights[player] ~= f or not state.alive then
+		if fightOf(player) ~= f or not state.alive then
 			return
 		end
 		local style = Config.styleById(player:GetAttribute("Style"))
@@ -218,7 +179,7 @@ local function swing(player: Player, f)
 		end
 		splat(state.hrp, dmg, player)
 		if state.hp <= 0 then
-			killEnemy(state)
+			killEnemy(state, player)
 		end
 	end)
 end
@@ -247,18 +208,18 @@ local function bite(state, player: Player)
 	end)
 end
 
-local function tick()
+function Combat.tick()
 	local now = os.clock()
-	for player, f in fights do
+	for player, f in Actions.all("fight") do
 		local state = enemies[f.target]
 		local hum, hrp = rootOf(player)
 		if not state or not state.alive or not hum then
-			stopFight(player)
+			Actions.stop(player, f)
 			continue
 		end
 		local d = flat(hrp.Position, state.hrp.Position) - RAT_RADIUS
 		if d > 60 then
-			stopFight(player)
+			Actions.stop(player, f)
 		elseif d <= Config.REACH and now >= f.nextSwing - 0.05 then
 			f.nextSwing = now + Config.SWORD.speed * Config.TICK
 			swing(player, f)
@@ -274,7 +235,7 @@ local function tick()
 			hum, hrp = rootOf(p)
 		end
 		-- give up when the hero is gone, dead or has run off
-		if p and (not hum or flat(hrp.Position, state.home) > 70 or not (fights[p] and fights[p].target == state.model) and flat(hrp.Position, state.hrp.Position) > 14) then
+		if p and (not hum or flat(hrp.Position, state.home) > 70 or not (fightOf(p) and (fightOf(p) :: any).target == state.model) and flat(hrp.Position, state.hrp.Position) > 14) then
 			state.target = nil
 			state.hum:MoveTo(state.home)
 			continue
@@ -306,20 +267,20 @@ end
 -- ===== players =====
 
 local function setupPlayer(player: Player)
-	for _, skill in Config.SKILLS do
-		player:SetAttribute("XP_" .. skill, Config.START_XP[skill] or 0)
-	end
-	player:SetAttribute("Style", "accurate")
 	local function onChar(char: Model)
 		local hum = char:WaitForChild("Humanoid", 10) :: Humanoid?
 		if not hum then
 			return
 		end
+		-- skills come from the save: wait for it before setting the hero's hitpoints
+		while not player:GetAttribute("Loaded") and player.Parent do
+			player:GetAttributeChangedSignal("Loaded"):Wait()
+		end
 		local hp = level(player, "Hitpoints")
 		hum.MaxHealth = hp
 		hum.Health = hp
 		hum.Died:Connect(function()
-			stopFight(player)
+			Actions.stop(player)
 			remotes.Message:FireClient(player, "Oh dear, you are dead!", "dead")
 		end)
 	end
@@ -329,16 +290,8 @@ local function setupPlayer(player: Player)
 	end
 end
 
-function Combat.init()
-	remotes = Instance.new("Folder")
-	remotes.Name = "Remotes"
-	remote("Splat")
-	remote("Xp")
-	remote("Fight")
-	remote("Message")
-	remote("SetStyle")
-	remote("StopFight")
-	remotes.Parent = ReplicatedStorage
+function Combat.init(r: Folder)
+	remotes = r
 
 	-- Hitpoints work as in OSRS: no Roblox health regeneration, one point back a minute instead
 	if not StarterPlayer.StarterCharacterScripts:FindFirstChild("Health") then
@@ -363,7 +316,6 @@ function Combat.init()
 			player:SetAttribute("Style", id)
 		end
 	end)
-	remotes.StopFight.OnServerEvent:Connect(stopFight)
 
 	-- for play tests in Studio: the command bar has its own copy of this module, so it starts fights through this
 	if game:GetService("RunService"):IsStudio() then
@@ -378,7 +330,6 @@ function Combat.init()
 	end
 	Players.PlayerAdded:Connect(setupPlayer)
 	Players.PlayerRemoving:Connect(function(p)
-		fights[p] = nil
 		for _, state in enemies do
 			if state.target == p then
 				state.target = nil
@@ -420,12 +371,6 @@ function Combat.init()
 		warn("Rat model failed to load: " .. tostring(loaded))
 	end
 
-	task.spawn(function()
-		while true do
-			task.wait(Config.TICK)
-			tick()
-		end
-	end)
 end
 
 return Combat

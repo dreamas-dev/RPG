@@ -141,15 +141,21 @@ local function house(name: string, cf: CFrame, w: number, d: number, h: number, 
 	return m
 end
 
-local function tree(pos: Vector3, rng: Random)
-	local m = model("Tree")
-	local h = rng:NextNumber(9, 14)
-	local trunk = rng:NextNumber(1.4, 2)
+-- a tree Woodcutting can chop (tag "Tree", attribute Kind): a normal tree, or a broader, darker oak
+local function tree(pos: Vector3, rng: Random, kind: string?)
+	local oak = kind == "Oak"
+	local m = model(oak and "Oak" or "Tree")
+	m:SetAttribute("Kind", oak and "Oak" or "Tree")
+	CollectionService:AddTag(m, "Tree")
+	local h = oak and rng:NextNumber(11, 15) or rng:NextNumber(9, 14)
+	local trunk = oak and rng:NextNumber(2.4, 3) or rng:NextNumber(1.4, 2)
 	part({ Class = "Part", Shape = Enum.PartType.Cylinder, Name = "Trunk", Size = Vector3.new(h, trunk, trunk),
-		CFrame = CFrame.new(pos + Vector3.new(0, h / 2, 0)) * CFrame.Angles(0, 0, math.pi / 2), Color = Color3.fromRGB(105, 74, 50), Material = Enum.Material.Wood }, m)
-	local green = Color3.fromHSV(rng:NextNumber(0.24, 0.32), rng:NextNumber(0.5, 0.7), rng:NextNumber(0.42, 0.58))
-	for i = 1, 4 do
-		local r = rng:NextNumber(5.5, 8)
+		CFrame = CFrame.new(pos + Vector3.new(0, h / 2, 0)) * CFrame.Angles(0, 0, math.pi / 2),
+		Color = oak and Color3.fromRGB(84, 62, 44) or Color3.fromRGB(105, 74, 50), Material = Enum.Material.Wood }, m)
+	local green = oak and Color3.fromHSV(rng:NextNumber(0.2, 0.25), rng:NextNumber(0.55, 0.7), rng:NextNumber(0.34, 0.42))
+		or Color3.fromHSV(rng:NextNumber(0.24, 0.32), rng:NextNumber(0.5, 0.7), rng:NextNumber(0.42, 0.58))
+	for i = 1, oak and 6 or 4 do
+		local r = oak and rng:NextNumber(7, 10) or rng:NextNumber(5.5, 8)
 		local off = i == 1 and Vector3.zero or Vector3.new(rng:NextNumber(-3, 3), rng:NextNumber(-1.5, 2), rng:NextNumber(-3, 3))
 		part({ Shape = Enum.PartType.Ball, Name = "Leaves", Size = Vector3.new(r, r, r), CFrame = CFrame.new(pos + Vector3.new(0, h + 1, 0) + off),
 			Color = green:Lerp(Color3.new(0.1, 0.25, 0.05), rng:NextNumber(0, 0.3)), Material = Enum.Material.Grass }, m)
@@ -469,7 +475,7 @@ local function forest()
 			continue
 		end
 		if clear(p) then
-			tree(p, rng)
+			tree(p, rng, rng:NextNumber() < 0.28 and "Oak" or nil)
 			placed += 1
 		end
 	end
