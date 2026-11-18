@@ -4,7 +4,7 @@ A browser RPG with idle skilling, combat, crafting, PvP and online hiscores. It 
 
 **Play:** https://endless-road.cocomelionas.workers.dev/
 
-Created by **dreamas**.
+Created by **[dreamas](https://github.com/dreamas-dev)**.
 
 ## My role
 
